@@ -1,0 +1,140 @@
+---
+title: "caaspp_census_additions"
+author: "Quyen Le"
+date: "2024-03-07"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(jsonlite)
+library(tools)
+library(stringr)
+```
+
+
+```{r}
+# declaring the API key
+api_key <- "zuaTt2Vgp3eRrlYGb3CK05qVU4fi0eDU6SzFINgu"
+
+# requesting the ori codes
+url <- paste("https://api.usa.gov/crime/fbi/cde", 
+             "/agency/byStateAbbr/CA?API_KEY=",
+             api_key,
+             sep = "")
+
+ori_df <- fromJSON(url) %>%
+  select(c(ori, county_name, agency_type_name)) %>%
+  mutate(county_name = str_to_title(county_name))
+
+# pulling the crime data
+ori_codes <- ori_df$ori
+master_list <- data.frame(matrix(ncol = 5, nrow = 0))
+colnames(master_list) <- c("ori", "data_year", "offense", "cleared", "actual")
+
+for (i in ori_codes){
+  url <- paste("https://api.usa.gov/crime/fbi/cde", 
+               "/summarized/agency/",
+               i,
+               "/violent-crime?from=2020&to=2022&API_KEY=",
+               api_key,
+               sep = "")
+  
+  current <- fromJSON(url)
+  master_list <- rbind(master_list, current)
+  rm(current)
+  print(i)
+}
+master_list <- practice
+# assign the ori's their county names
+master_list <- master_list %>%
+  left_join(ori_df, by="ori") %>%
+  filter(county_name.x != "Not Specified") %>%
+  select(-c(county_name.y, agency_type_name.y))
+
+master_list <- master_list %>%
+  select(-c(agency_type_name.x, county_name.y))
+
+# writing the csv
+write.csv(master_list, "2020_2022_crime_statistics.csv")
+
+#unemployment or employment rate
+```
+
+```{r}
+# older crimes
+older_list <- data.frame(matrix(ncol = 5, nrow = 0))
+colnames(older_list) <- c("ori", "data_year", "offense", "cleared", "actual")
+
+for (i in ori_codes){
+  url <- paste("https://api.usa.gov/crime/fbi/cde", 
+               "/summarized/agency/",
+               i,
+               "/violent-crime?from=2016&to=2019&API_KEY=",
+               api_key,
+               sep = "")
+  
+  current <- fromJSON(url)
+  older_list <- rbind(older_list, current)
+  rm(current)
+  print(i)
+}
+
+older_list <- older_list %>%
+  left_join(ori_df, by="ori") %>%
+  filter(county_name != "Not Specified")
+
+# recent crimes
+newer_list <- read.csv("2020_2022_crime_statistics.csv") %>%
+  select(-X)
+
+# combining datasets
+master_list <- rbind(older_list, newer_list) %>%
+  group_by(data_year, county_name, offense) %>%
+  summarise(total_violent_crimes = sum(actual))
+
+county_pop <- read.csv("county_pop.csv") %>%
+  mutate(county = str_remove_all(county, " County, California"))
+
+master_list <- master_list %>%
+  rename("county" = "county_name") %>%
+  left_join(county_pop, by="county") %>%
+  mutate(crime_rate = (total_violent_crimes/population)*100) %>%
+  rename("year" = "data_year") %>%
+  select(year, county, crime_rate)
+
+write.csv(master_list, "2016_2022_crime_statistics.csv")
+```
+
+```{r}
+caaspp_census_ela <- read_csv("caaspp_census_ela.csv") %>%
+  select(-c(test_type, test_name, name)) %>%
+  na.omit() %>%
+  mutate(county_code = substr(CDSCode, 1, 2))
+
+county_code_names <- read.csv("county_code_names.csv", header=F,) %>%
+  rename("county_code" = "V1",
+         "name" = "V2") %>%
+  mutate(county_code = as.character(county_code),
+         county_code = str_pad(county_code, width=2, pad="0", side="left"))
+
+master_list <- master_list %>%
+  mutate(year = as.double(year))
+
+caaspp_census_ela <- caaspp_census_ela %>%
+  left_join(county_code_names, by="county_code") %>%
+  left_join(master_list, by=c("name"="county", "year"))
+
+```
+
+# linear regression models
+```{r}
+mean_score_model = lm(formula = mean_scale_score ~ grade + year +
+                   family_single_male + family_single_female + non_family +
+                    non_white + log(non_white_income) + gini + crime_rate, data = caaspp_census_ela)
+summary(mean_score_model)
+
+
+```
+
